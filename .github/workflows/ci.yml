@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: extractions/setup-just@v2
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          activate-environment: true
+
+      - name: Install dev dependencies
+        run: uv pip install -e ".[dev]"
+
+      - name: Run linters
+        run: just check
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: extractions/setup-just@v2
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          activate-environment: true
+
+      - name: Install dev dependencies
+        run: uv pip install -e ".[dev]"
+
+      - name: Run mypy
+        run: just typecheck
+
+  test:
+    name: "Test (Python ${{ matrix.python-version }}, Django ${{ matrix.django-label }})"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            django-version: "Django>=5.2,<6"
+            django-label: "5.2"
+            coverage: false
+          - python-version: "3.12"
+            django-version: "Django>=6.0,<7"
+            django-label: "6.0"
+            coverage: false
+          - python-version: "3.12"
+            django-version: "Django"
+            django-label: "latest"
+            coverage: false
+          - python-version: "3.13"
+            django-version: "Django>=5.2,<6"
+            django-label: "5.2"
+            coverage: true
+          - python-version: "3.13"
+            django-version: "Django>=6.0,<7"
+            django-label: "6.0"
+            coverage: false
+          - python-version: "3.13"
+            django-version: "Django"
+            django-label: "latest"
+            coverage: false
+          - python-version: "3.14"
+            django-version: "Django>=5.2,<6"
+            django-label: "5.2"
+            coverage: false
+          - python-version: "3.14"
+            django-version: "Django>=6.0,<7"
+            django-label: "6.0"
+            coverage: false
+          - python-version: "3.14"
+            django-version: "Django"
+            django-label: "latest"
+            coverage: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "${{ matrix.python-version }}"
+          activate-environment: true
+
+      - name: Install testing dependencies
+        run: uv pip install -e ".[dev]"
+
+      - name: Pin Django version
+        run: uv pip install "${{ matrix.django-version }}"
+
+      - name: Run tests (with coverage)
+        if: matrix.coverage
+        run: uv run --no-sync pytest tests/ --cov --cov-report=xml --cov-report=json:coverage.json
+
+      - name: Run tests
+        if: "!matrix.coverage"
+        run: uv run --no-sync pytest tests/
+
+      - name: Coverage comment
+        if: matrix.coverage && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: uv run --no-sync python .github/scripts/coverage_comment.py
+
+  ci-complete:
+    name: CI Complete
+    needs: [lint, typecheck, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more CI jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "All CI jobs passed"
